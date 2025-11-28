@@ -8,9 +8,9 @@ Implementation of [Brus-16](https://github.com/true-grue/Brus-16) in Umka.  Use 
 tophat <rom>
 ```
 
-ROMS included in `roms/` and they all belong to the original creator @true-grue / Peter Sovietov.
+ROMS included in `roms/` and belong to the original creator @true-grue / Peter Sovietov and other creators.
 
-P.S. Thanks to the creator for including Tower Bloxx clone.
+P.S. Thanks to the creator of the Tower Bloxx clone. 
 I used to play it on Nokia as a kid :D
 
 I only really got motivated when I saw that game, so I wrote this overnight.
