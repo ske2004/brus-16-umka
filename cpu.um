@@ -1,0 +1,171 @@
+const (
+  PRG_SIZE*   = 1<<13
+  DAT_SIZE*   = 1<<13
+  STK_SIZE*   = 32
+  RSTK_SIZE*  = 16
+
+  MEM_INPUT*  = 7792
+  MEM_RECT*   = 7808
+  
+  CNT_RECT*   = 64
+
+  RECT_ABS*    = 0
+  RECT_X*      = 1
+  RECT_Y*      = 2
+  RECT_W*      = 3
+  RECT_H*      = 4
+  RECT_COLOR*  = 5
+)
+
+type CPU* = struct {
+  prg:  [PRG_SIZE] uint16
+  dat:  [DAT_SIZE] uint16
+  stk:  [STK_SIZE] uint16
+  rstk: [RSTK_SIZE]uint16
+
+  pc, sp, rp, fp, addr: uint16
+
+  wait: bool
+}
+
+type Opcode* = enum {
+  add;     sub;   mul;         and
+  or;      xor;   shl;         shr
+  shra;    eq;    neq;         lt
+  le;      gt;    ge;          ltu
+  load;    store; locals;      set_fp
+  ret;     push;  push_mr;     wait
+  jmp;     jz;    call;        pushu
+}
+
+instrNames := []str{
+  "ADD",     "SUB",   "MUL",         "AND",
+  "OR",      "XOR",   "SHL",         "SHR",
+  "SHRA",    "EQ",    "NEQ",         "LT",
+  "LE",      "GT",    "GE",          "LTU",
+  "LOAD",    "STORE", "LOCALS",      "SET_FP",
+  "RET",     "PUSH",  "PUSH_MR",     "WAIT",
+  "JMP",     "JZ",    "CALL",        "PUSHU"
+}
+
+type Instr* = struct {
+  op: Opcode
+  i: bool
+  imm: uint16
+}
+
+// we need to KILL overflow checks
+fn signext*(v, bit: uint): uint16 {
+  mask := (1<<(bit-1))
+  return uint((v~mask)-mask)&0xFFFF
+}
+
+fn u16toi16*(inp: uint16): int16 {
+  return inp>32767 ? -(65536-int(inp)) : inp
+}
+
+fn fmtInstr(instr: Instr): str {
+  name := instrNames[int(instr.op)]
+  operand := instr.i
+  
+  if instr.op == .load || instr.op == .store { operand = true }
+  if instr.i && instr.op == .load  { name = "GET_LOCAL" }
+  if instr.i && instr.op == .store { name = "SET_LOCAL" }
+
+  if operand {
+    return sprintf("%s %04X", name, instr.imm)
+  }
+  return sprintf("%s", name)
+}
+
+fn decode(op: uint16): Instr {
+  instr := Instr{}
+
+  if op&0x8000==0 {
+    // f0
+    instr.op = Opcode((op>>10)&0x1F)
+    instr.i = ((op>>9)&1)>0
+    instr.imm = signext(op&0x1FF, 9)
+  } else {
+    // f1
+    instr.op = Opcode(((op>>13)&3)+24)
+    instr.i = true
+    instr.imm = op&0x1FFF
+  }
+
+  return instr
+}
+
+fn (cpu: ^CPU) push*(v: uint16) {
+  // printf("PUSH %v %v\n", v, cpu.sp)
+  cpu.stk[cpu.sp] = v
+  cpu.sp = (uint(cpu.sp)+1)&(STK_SIZE-1)
+}
+
+fn (cpu: ^CPU) pop*(): uint16 {
+  cpu.sp = (uint(cpu.sp)-1)&(STK_SIZE-1)
+  // printf("POP: %v %v\n", cpu.stk[cpu.sp], cpu.sp)
+  return cpu.stk[cpu.sp]
+} 
+
+fn (cpu: ^CPU) rpush*(v: uint16) {
+  cpu.rstk[cpu.rp] = v
+  cpu.rp = (uint(cpu.rp)+1)&(RSTK_SIZE-1)
+}
+
+fn (cpu: ^CPU) rpop*(): uint16 {
+  cpu.rp = (uint(cpu.rp)-1)&(RSTK_SIZE-1)
+  return cpu.rstk[cpu.rp]
+} 
+
+fn (cpu: ^CPU) step*() {
+  instr := decode(cpu.prg[cpu.pc])
+  // printf("%04X [%04X-%02d] %s\n", cpu.pc, cpu.prg[cpu.pc], int(instr.op), fmtInstr(instr))
+  cpu.pc++
+  cpu.pc = cpu.pc & (PRG_SIZE-1)
+
+  a, b := uint(0), uint(0)
+  if instr.op <= .ltu {
+    b = instr.i ? instr.imm : cpu.pop()
+    a = cpu.pop()
+  }
+
+  // printf("%v (%v) %v (%v)\n", a, u16toi16(a), b, u16toi16(b))
+
+  switch instr.op {
+    case .add:       cpu.push((a+b)&0xFFFF)
+    case .sub:       cpu.push((a-b)&0xFFFF)
+    case .mul:       cpu.push((u16toi16(a)*u16toi16(b))&0xFFFF)
+    case .and:       cpu.push(a&b)
+    case .or:        cpu.push(a|b)
+    case .xor:       cpu.push(a~b)
+    case .shl:       cpu.push((a << b)&0xFFFF)
+    case .shr:       cpu.push(uint16(a >> b))
+    case .shra:      cpu.push( (u16toi16(a) >> b)&0xFFFF )
+    case .eq:        cpu.push(uint16(a==b))
+    case .neq:       cpu.push(uint16(a!=b))
+    case .lt:        cpu.push(uint16(u16toi16(a)<u16toi16(b)))
+    case .le:        cpu.push(uint16(u16toi16(a)<=u16toi16(b)))
+    case .gt:        cpu.push(uint16(u16toi16(a)>u16toi16(b)))
+    case .ge:        cpu.push(uint16(u16toi16(a)>=u16toi16(b)))
+    case .ltu:       cpu.push(uint16(a<b))
+    
+    case .load:      cpu.addr = (instr.i?cpu.fp:cpu.pop()) + instr.imm
+    case .store:     cpu.addr = (instr.i?cpu.fp:cpu.pop()) + instr.imm
+                     cpu.dat[cpu.addr&(DAT_SIZE-1)] = cpu.pop()
+    case .locals:    cpu.fp -= instr.imm
+    case .set_fp:    cpu.fp = cpu.pop()
+    case .ret:       cpu.fp += instr.imm; cpu.pc = cpu.rpop()
+    case .push:      cpu.push(instr.imm)
+    case .push_mr:   cpu.addr = cpu.dat[cpu.addr&(DAT_SIZE-1)]
+                     cpu.push(cpu.addr)
+    case .wait:      cpu.wait=true
+
+    case .jmp:       cpu.pc = instr.imm
+    case .jz:        cpu.pc = cpu.pop() > 0 ? cpu.pc : instr.imm
+    case .call:      cpu.rpush(cpu.pc); cpu.pc = instr.imm
+    case .pushu:     cpu.push(instr.imm)
+
+    default: exit(1, sprintf("Unhandled opcode %d", instr.op))
+  }
+}

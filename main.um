@@ -1,0 +1,88 @@
+import (
+  "window.um"
+  "canvas.um"
+  "cpu.um"
+  "input.um"
+  "std.um"
+)
+
+fn initCpu*(romPath: str): ^cpu::CPU {
+  file, err := std::fopen(romPath, "rb")
+  std::exitif(err)
+  data_, err := std::freadall(file)
+  std::exitif(err)
+  data := make([]uint16, len(data_)/2)
+
+  for i:=0; i<len(data_)/2; i++ {
+    data[i] |= uint8(data_[i*2+0])
+    data[i] |= uint16(data_[i*2+1])<<8
+  }
+
+  cpu := &cpu::CPU{}
+  cpu.fp = cpu::MEM_INPUT
+
+  csz := data[0]
+  dsz := data[1]
+  i := 2 
+
+  for k:=0; k<csz; k++ { cpu.prg[k] = data[i]; i++ }
+  for k:=0; k<dsz; k++ { cpu.dat[k] = data[i]; i++ }
+
+  return cpu
+}
+
+
+fn decode565(rgb: uint16): uint32 {
+  r, g, b := (rgb>>11)*8, ((rgb>>5)&0x3F)*4, (rgb&0x1F)*8
+  return 0xFF | (r<<24) | (g<<16) | (b << 8)
+}
+
+keymap := []input::Key{
+  .up,
+  .down,
+  .left,
+  .right,
+  .k, .l, .i, .o,
+  .w, .s, .a, .d,
+  .f, .g, .r, .t,
+}
+
+fn init*() {
+  if std::argc() != 1 {
+    printf("usage: tophat <rom>\n") 
+    exit(1)
+  }
+
+  romPath := std::argv(0)
+  window::setup("Bobrus16 : "+romPath, 640, 480)
+  cpu := initCpu(romPath)
+
+  window::onFrame.register(|cpu| {
+    for i, key in keymap {
+      cpu.dat[cpu::MEM_INPUT+i] = uint16(input::isPressed(key))
+    }
+
+    for !cpu.wait {
+      cpu.step()
+    }
+    cpu.wait = false
+
+    cx, cy := 0, 0
+    canvas::drawRect(0x000000FF, {0, 0, 640, 480})
+    for i:=cpu::MEM_RECT; i<cpu::MEM_RECT+cpu::CNT_RECT*6; i+=6 {
+      isAbs := cpu.dat[i]
+      x, y, w, h := cpu::u16toi16(cpu::signext(cpu.dat[i+1], 16)), cpu::u16toi16(cpu::signext(cpu.dat[i+2], 16)), cpu.dat[i+3], cpu.dat[i+4]
+      color := cpu.dat[i+5]
+
+      if isAbs>0 {
+        cx = x
+        cy = y
+      } else {
+        x += cx
+        y += cy
+      }
+
+      canvas::drawRect(decode565(color), {x, y, w, h})
+    }
+  })
+}
