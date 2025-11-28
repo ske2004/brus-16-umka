@@ -1,3 +1,7 @@
+
+<img width=380 src="img.png" align=left></img>
+
+
 Implementation of [Brus-16](https://github.com/true-grue/Brus-16) in Umka.  Use [tophat](http://github.com/tophat2d/tophat) to launch.
 
 ```sh
